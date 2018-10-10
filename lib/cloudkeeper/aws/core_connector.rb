@@ -38,6 +38,7 @@ module Cloudkeeper
 
       def pre_action(_empty, _call)
         logger.debug { 'GRPC pre action' }
+        remove_expired_appliances
         Google::Protobuf::Empty.new
       end
 
