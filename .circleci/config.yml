@@ -1,0 +1,39 @@
+version: 2
+jobs:
+  install:
+    docker:
+      - image: docker:stable
+    working_directory: /tmp
+    steps:
+      - checkout
+      - run: bundle install --path vendor
+      - persist_to_workspace:
+          root: workspace
+          paths:
+            - .
+  rspec:
+    docker:
+      - image: docker:stable
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+      - run: bundle exec rspec
+  rubocop:
+    docker:
+      - image: docker:stable
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+      - run: bundle exec rubocop
+
+workflows:
+  version: 2
+  install_and_test:
+    jobs:
+      - install
+      - rspec:
+          requires:
+            - install
+      - rubocop:
+          requires:
+            - install
