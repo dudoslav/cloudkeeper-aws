@@ -2,33 +2,75 @@ version: 2
 jobs:
   install:
     docker:
-      - image: docker:stable
-    working_directory: /tmp
+      - image: circleci/ruby:2.4-node
+    working_directory: ~/workspace
     steps:
       - checkout
+      - run: git submodule update --init --recursive
       - run: bundle install --path vendor
       - persist_to_workspace:
-          root: workspace
+          root: .
           paths:
             - .
   rspec:
     docker:
-      - image: docker:stable
+      - image: circleci/ruby:2.4-node
+    working_directory: ~/workspace
     steps:
       - attach_workspace:
-          at: /tmp/workspace
+          at: ~/workspace
+      - run: bundle --path vendor
       - run: bundle exec rspec
   rubocop:
     docker:
-      - image: docker:stable
+      - image: circleci/ruby:2.4-node
+    working_directory: ~/workspace
     steps:
       - attach_workspace:
-          at: /tmp/workspace
+          at: ~/workspace
+      - run: bundle --path vendor
       - run: bundle exec rubocop
+  docker_build:
+    docker:
+      - image: docker
+    working_directory: ~/docker
+    steps:
+      - run: apk add --no-cache git openssh
+      - checkout
+      - setup_remote_docker
+      - run: |
+          TAG=${CIRCLE_TAG#v}
+          BRANCH=${TAG/%.*/.x}
+          VERSION=${TAG}
+          LATEST=$(git tag --sort=-version:refname | head -n 1)
+
+          docker build --build-arg branch=$BRANCH --build-arg version="$VERSION" -t $DOCKERHUB_ORGANIZATION/$CIRCLE_PROJECT_REPONAME:$TAG ./$DOCKERFILE_DIR
+          docker save -o docker.tar $DOCKERHUB_ORGANIZATION/$CIRCLE_PROJECT_REPONAME:$TAG
+      - persist_to_workspace:
+          root: .
+          paths:
+            - docker.tar
+  docker_upload:
+    docker:
+      - image: docker
+    working_directory: ~/docker
+    steps:
+      - run: apk add --no-cache git openssh
+      - setup_remote_docker
+      - attach_workspace:
+          at: ~/docker/docker.tar
+      - run: |
+          docker load -i build/docker.tar
+          docker login -u $DOCKER_USER -p $DOCKER_PASS
+          docker push $DOCKERHUB_ORGANIZATION/$CIRCLE_PROJECT_REPONAME:$TAG
+          if [ "$LATEST" == "$CIRCLE_TAG" ]; then
+            docker tag $DOCKERHUB_ORGANIZATION/$CIRCLE_PROJECT_REPONAME:$TAG $DOCKERHUB_ORGANIZATION/$CIRCLE_PROJECT_REPONAME:latest
+            docker push $DOCKERHUB_ORGANIZATION/$CIRCLE_PROJECT_REPONAME:latest
+          fi
 
 workflows:
   version: 2
-  install_and_test:
+  install_test_build_upload:
     jobs:
       - install
       - rspec:
@@ -37,3 +79,20 @@ workflows:
       - rubocop:
           requires:
             - install
+      - docker_build:
+          requires:
+            - rubocop
+            - rspec
+          filters:
+            tags:
+              only: /v.*/
+            branches:
+              ignore: /*/
+      - docker_upload:
+          requires:
+            - docker_build
+          filters:
+            tags:
+              only: /v.*/
+            branches:
+              ignore: /*/
